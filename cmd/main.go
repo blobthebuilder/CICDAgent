@@ -3,27 +3,38 @@ package main
 import (
 	"fmt"
 	"log"
-	"strings"
 
+	"github.com/blobthebuilder/CICDAgent/internal/agent"
 	"github.com/blobthebuilder/CICDAgent/internal/git"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	fmt.Println("🤖 CICD Agent: Analyzing changes...")
-
-	// Get diff of the last commit
-	diff, err := git.GetDiff("HEAD~1")
+	// Load .env file from the root directory
+	err := godotenv.Load()
 	if err != nil {
-		log.Fatalf("Failed to read git diff: %v", err)
+		log.Fatal("Error loading .env file. Make sure it exists and is in the root folder.")
 	}
 
-	if len(strings.TrimSpace(diff)) == 0 {
-		fmt.Println("No changes detected since the last commit.")
+	fmt.Println("🤖 CICD Agent: Analyzing staged changes...")
+
+	// 1. Get the staged changes (git add . must be run first!)
+	diff, err := git.GetDiff("staged")
+	if err != nil {
+		log.Fatalf("Error reading git: %v", err)
+	}
+
+	if diff == "" {
+		fmt.Println("No staged changes found. Use 'git add' on a file first!")
 		return
 	}
 
-	fmt.Println("--- Current Diff ---")
-	fmt.Println(diff)
-	
-	// NEXT STEP: Send this 'diff' string to the LLM
+	// 2. Pass the key explicitly or let the agent package pull it from OS
+	review, err := agent.GetReview(diff)
+	if err != nil {
+		log.Fatalf("AI Error: %v", err)
+	}
+
+	fmt.Println("\n--- AI CODE REVIEW ---")
+	fmt.Println(review)
 }
