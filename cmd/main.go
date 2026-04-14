@@ -42,12 +42,12 @@ func main() {
 		fmt.Printf("\n--- 🛠️ GENERATING TEST: %s ---\n", response.TestFile)
 		
 		// Call your custom tool here
-		err := tools.WriteTestFile(response.TestFile, response.TestCode)
+		writtenPath, err := tools.WriteTestFile(response.TestFile, response.TestCode)
 		if err != nil {
 			log.Fatalf("Failed to save test file via tool: %v", err)
 		}
 		
-		fmt.Printf("✅ Saved test file to %s\n", response.TestFile)
+		fmt.Printf("✅ Saved test file to %s\n", writtenPath)
 		fmt.Println("💡 Run 'go test ./...' to see if it passes!")
 	} else {
 		fmt.Println("\nNo test code generated for this diff.")
