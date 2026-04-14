@@ -6,20 +6,19 @@ import (
 
 	"github.com/blobthebuilder/CICDAgent/internal/agent"
 	"github.com/blobthebuilder/CICDAgent/internal/git"
+	"github.com/blobthebuilder/CICDAgent/internal/tools" // <-- Add your tools package
 	"github.com/joho/godotenv"
 )
 
 func main() {
-	// Load .env file from the root directory
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file. Make sure it exists and is in the root folder.")
+		log.Fatal("Error loading .env file. Make sure it exists in the root folder.")
 	}
 
 	fmt.Println("🤖 CICD Agent: Analyzing staged changes...")
 
-	// 1. Get the staged changes (git add . must be run first!)
-	diff, err := git.GetDiff("staged")
+	diff, err := git.GetDiff("last-commit")
 	if err != nil {
 		log.Fatalf("Error reading git: %v", err)
 	}
@@ -29,12 +28,28 @@ func main() {
 		return
 	}
 
-	// 2. Pass the key explicitly or let the agent package pull it from OS
-	review, err := agent.GetReview(diff)
+	// 1. Get the Review and Code from the Agent
+	response, err := agent.GetAction(diff)
 	if err != nil {
 		log.Fatalf("AI Error: %v", err)
 	}
 
-	fmt.Println("\n--- AI CODE REVIEW ---")
-	fmt.Println(review)
+	fmt.Println("\n--- 📝 AI CODE REVIEW ---")
+	fmt.Println(response.Review)
+
+	// 2. Use your File Tool to save the test
+	if response.TestFile != "" && response.TestCode != "" {
+		fmt.Printf("\n--- 🛠️ GENERATING TEST: %s ---\n", response.TestFile)
+		
+		// Call your custom tool here
+		err := tools.WriteTestFile(response.TestFile, response.TestCode)
+		if err != nil {
+			log.Fatalf("Failed to save test file via tool: %v", err)
+		}
+		
+		fmt.Printf("✅ Saved test file to %s\n", response.TestFile)
+		fmt.Println("💡 Run 'go test ./...' to see if it passes!")
+	} else {
+		fmt.Println("\nNo test code generated for this diff.")
+	}
 }
