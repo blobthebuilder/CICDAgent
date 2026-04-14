@@ -16,7 +16,7 @@ func main() {
 		log.Fatal("Error loading .env file. Make sure it exists in the root folder.")
 	}
 
-	fmt.Println("🤖 CICD Agent: Analyzing staged changes...")
+	fmt.Println("🤖 CICD Agent: Analyzing last committed changes...")
 
 	diff, err := git.GetDiff("last-commit")
 	if err != nil {

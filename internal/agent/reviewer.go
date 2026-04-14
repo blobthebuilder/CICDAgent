@@ -72,27 +72,33 @@ func GetAction(diff string) (*AgentResponse, error) {
 func parseAgentResponse(raw string) *AgentResponse {
 	resp := &AgentResponse{}
 
-	// Split the text using the tags we told the AI to generate
-	parts := strings.Split(raw, "[FILENAME]")
-	if len(parts) == 2 {
-		resp.Review = strings.ReplaceAll(strings.TrimSpace(parts[0]), "[REVIEW]", "")
+	reviewPart := raw
+	filenamePart := ""
+	testCodePart := ""
 
-		subParts := strings.Split(parts[1], "[TEST_CODE]")
-		if len(subParts) == 2 {
-			resp.TestFile = strings.TrimSpace(subParts[0])
-
-			// Clean up the code block just in case the AI added markdown ```go backticks
-			code := strings.TrimSpace(subParts[1])
-			code = strings.TrimPrefix(code, "```go")
-			code = strings.TrimPrefix(code, "```")
-			code = strings.TrimSuffix(code, "```")
-			
-			resp.TestCode = strings.TrimSpace(code)
-		}
-	} else {
-		// Fallback if the AI fails to use the formatting
-		resp.Review = raw
+	// Sequentially split the raw string by the markers.
+	// This is more robust than assuming all markers are present.
+	if parts := strings.SplitN(raw, "[FILENAME]", 2); len(parts) == 2 {
+		reviewPart = parts[0]
+		filenamePart = parts[1]
 	}
+
+	if filenamePart != "" {
+		if parts := strings.SplitN(filenamePart, "[TEST_CODE]", 2); len(parts) == 2 {
+			filenamePart = parts[0]
+			testCodePart = parts[1]
+		}
+	}
+
+	// Clean up and assign the parts to the struct.
+	resp.Review = strings.TrimSpace(strings.ReplaceAll(reviewPart, "[REVIEW]", ""))
+	resp.TestFile = strings.TrimSpace(filenamePart)
+
+	code := strings.TrimSpace(testCodePart)
+	code = strings.TrimPrefix(code, "```go")
+	code = strings.TrimPrefix(code, "```")
+	code = strings.TrimSuffix(code, "```")
+	resp.TestCode = strings.TrimSpace(code)
 
 	return resp
 }
