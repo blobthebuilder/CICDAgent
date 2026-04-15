@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"os/exec"
 )
 
@@ -13,13 +14,13 @@ type TestResult struct {
 
 // RunGoTests executes 'go test' on a specific set of directories and captures the result.
 // If no paths are provided, it defaults to running all tests with './...'.
-func RunGoTests(paths ...string) (*TestResult, error) {
+func RunGoTests(ctx context.Context, paths ...string) (*TestResult, error) {
 	args := []string{"test"}
 	if len(paths) > 0 {
 		args = append(args, paths...)
 	}
 	// Create the command
-	cmd := exec.Command("go", args...)
+	cmd := exec.CommandContext(ctx, "go", args...)
 
 	// We need to capture the output, not just let it print to the terminal
 	var out bytes.Buffer

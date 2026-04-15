@@ -21,8 +21,12 @@ type GeneratedTest struct {
 
 // AgentResponse holds the structured output from the LLM, including a list of tests.
 type AgentResponse struct {
-	Review string          `json:"review"`
-	Tests  []GeneratedTest `json:"tests"`
+    Review         string          `json:"review"`
+    Tests          []GeneratedTest `json:"tests"`
+    
+    // NEW: Branching fields for the Fix loop
+    CodeBugFound   bool            `json:"code_bug_found"`
+    BugExplanation string          `json:"bug_explanation"`
 }
 
 // getActionFromGemini attempts to get a response from the Gemini API.
@@ -92,7 +96,7 @@ func getActionFromGemini(ctx context.Context, prompt string) (string, error) {
 }
 
 // callLocalModel sends the prompt to a local, OpenAI-compatible LLM endpoint.
-func callLocalModel(prompt string) (string, error) {
+func callLocalModel(ctx context.Context, prompt string) (string, error) {
 	endpoint := os.Getenv("LOCAL_LLM_ENDPOINT")
 	if endpoint == "" {
 		return "", fmt.Errorf("LOCAL_LLM_ENDPOINT not set in environment, and Gemini failed")
@@ -112,7 +116,7 @@ func callLocalModel(prompt string) (string, error) {
 		return "", fmt.Errorf("failed to marshal local LLM payload: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(body))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request for local LLM: %w", err)
 	}
@@ -150,7 +154,7 @@ func callLocalModel(prompt string) (string, error) {
 }
 
 // GetAction orchestrates getting a response from an AI model, with a fallback.
-func GetAction(diff string) (*AgentResponse, error) {
+func GetAction(ctx context.Context, diff string) (*AgentResponse, error) {
 	prompt := fmt.Sprintf(`
 		You are a Senior Software Engineer AI Agent.
 
@@ -167,7 +171,7 @@ func GetAction(diff string) (*AgentResponse, error) {
 	`, diff)
 
 	// Try Gemini first
-	rawText, err := getActionFromGemini(context.Background(), prompt)
+	rawText, err := getActionFromGemini(ctx, prompt)
 	if err == nil {
 		slog.Info("Successfully received response from Gemini.")
 		return parseAgentResponse(rawText)
@@ -176,7 +180,7 @@ func GetAction(diff string) (*AgentResponse, error) {
 	// If Gemini fails, log the error and try the local model
 	slog.Warn("Gemini API failed. Falling back to local model.", "error", err)
 
-	rawText, err = callLocalModel(prompt)
+	rawText, err = callLocalModel(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("all models failed. Local model error: %w", err)
 	}
@@ -206,46 +210,62 @@ func parseAgentResponse(rawJSON string) (*AgentResponse, error) {
 }
 
 // FixTests asks the AI to fix previously generated tests based on compiler/test errors.
-func FixTests(diff string, previousTests []GeneratedTest, errorOutput string) (*AgentResponse, error) {
-    // Convert previous tests to a string so the AI knows what it wrote last time
+func FixTests(ctx context.Context, diff string, previousTests []GeneratedTest, errorOutput string) (*AgentResponse, error) {
     prevCode := ""
     for _, t := range previousTests {
         prevCode += fmt.Sprintf("\n--- %s ---\n%s\n", t.FileName, t.Code)
     }
 
     prompt := fmt.Sprintf(`
-        You are a Senior Software Engineer AI Agent debugging a failed CI pipeline.
-
-        You previously wrote tests for this git diff, but they FAILED to compile or pass.
-        Analyze the error output and rewrite the tests to fix the issue.
+        You are a Senior Software Engineer debugging a failing CI pipeline.
+        You previously wrote tests for this diff, but they FAILED.
         
-        RULES:
-        1. Read the ERROR OUTPUT carefully. If it's a missing import, add it. If it's a logic error, fix the assertion.
-        2. Return the COMPLETE fixed test file(s). Do not just return the snippet that changed.
+        YOUR TASK: Analyze the error output and determine the root cause.
+        
+        PATH A (Test Error): If the error is due to a bad test (e.g., missing import, wrong assertion), set "code_bug_found" to false, leave "bug_explanation" empty, and rewrite the "tests" array with the fixed code.
+        
+        PATH B (Code Error): If the test is correct but the SOURCE CODE is broken, set "code_bug_found" to true, provide a detailed "bug_explanation", and leave the "tests" array empty.
 
         GIT DIFF:
         %s
 
-        PREVIOUS TEST CODE YOU WROTE:
+        PREVIOUS TESTS:
         %s
 
-        ERROR OUTPUT FROM 'go test':
+        ERROR OUTPUT:
         %s
     `, diff, prevCode, errorOutput)
 
-    // Try Gemini
-    rawText, err := getActionFromGemini(context.Background(), prompt)
-    if err == nil {
-        slog.Info("Successfully received fix from Gemini.")
-        return parseAgentResponse(rawText)
+    // Using the modern Schema enforcement
+    config := &genai.GenerateContentConfig{
+        ResponseMIMEType: "application/json",
+        ResponseSchema: &genai.Schema{
+            Type: genai.TypeObject,
+            Properties: map[string]*genai.Schema{
+                "code_bug_found":   {Type: genai.TypeBoolean, Description: "True if the source code is broken, false if the test is broken."},
+                "bug_explanation":  {Type: genai.TypeString, Description: "Explanation of the source code bug (if any)."},
+                "review":           {Type: genai.TypeString, Description: "Brief summary of your fix strategy."},
+                "tests": {
+                    Type: genai.TypeArray,
+                    Items: &genai.Schema{
+                        Type: genai.TypeObject,
+                        Properties: map[string]*genai.Schema{
+                            "file_name": {Type: genai.TypeString},
+                            "code":      {Type: genai.TypeString},
+                        },
+                    },
+                },
+            },
+            Required: []string{"code_bug_found", "bug_explanation", "tests"},
+        },
     }
 
-    // Fallback to Local
-    slog.Warn("Gemini API failed during fix. Falling back to local model.", "error", err)
-    rawText, err = callLocalModel(prompt)
+    client, _ := genai.NewClient(ctx, &genai.ClientConfig{APIKey: os.Getenv("GEMINI_API_KEY")})
+    result, err := client.Models.GenerateContent(ctx, "gemini-3.1-flash", genai.Text(prompt), config)
+    
     if err != nil {
-        return nil, fmt.Errorf("all models failed during fix loop: %w", err)
+        return nil, err
     }
 
-    return parseAgentResponse(rawText)
+    return parseAgentResponse(result.Candidates[0].Content.Parts[0].Text)
 }
