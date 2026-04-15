@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/blobthebuilder/CICDAgent/internal/agent"
@@ -14,7 +14,7 @@ import (
 func main() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatal("Error loading .env file. Make sure it exists in the root folder.")
+		slog.Warn("Error loading .env file. Make sure it exists in the root folder.")
 	}
 
 	// Default to "last-commit" mode, but allow overriding from command-line argument
@@ -27,7 +27,8 @@ func main() {
 
 	diff, err := git.GetDiff(diffMode)
 	if err != nil {
-		log.Fatalf("Error reading git: %v", err)
+		slog.Error("Error reading git", "error", err)
+		os.Exit(1)
 	}
 
 	if diff == "" {
@@ -38,24 +39,26 @@ func main() {
 	// 1. Get the Review and Code from the Agent
 	response, err := agent.GetAction(diff)
 	if err != nil {
-		log.Fatalf("AI Error: %v", err)
+		slog.Error("AI Error", "error", err)
+		os.Exit(1)
 	}
 
 	fmt.Println("\n--- 📝 AI CODE REVIEW ---")
 	fmt.Println(response.Review)
 
-	// 2. Use your File Tool to save the test
-	if response.TestFile != "" && response.TestCode != "" {
-		fmt.Printf("\n--- 🛠️ GENERATING TEST: %s ---\n", response.TestFile)
-		
-		// Call your custom tool here
-		writtenPath, err := tools.WriteTestFile(response.TestFile, response.TestCode)
-		if err != nil {
-			log.Fatalf("Failed to save test file via tool: %v", err)
+	// 2. Use your File Tool to save the generated tests
+	if len(response.Tests) > 0 {
+		fmt.Printf("\n--- 🛠️ GENERATING %d TEST FILE(S) ---\n", len(response.Tests))
+		for _, test := range response.Tests {
+			fmt.Printf("-> Writing test for %s...\n", test.FileName)
+			writtenPath, err := tools.WriteTestFile(test.FileName, test.Code)
+			if err != nil {
+				slog.Error("Failed to save test file", "file", test.FileName, "error", err)
+				os.Exit(1)
+			}
+			fmt.Printf("✅ Saved test file to %s\n", writtenPath)
 		}
-		
-		fmt.Printf("✅ Saved test file to %s\n", writtenPath)
-		fmt.Println("💡 Run 'go test ./...' to see if it passes!")
+		fmt.Println("\n💡 Run 'go test ./...' to see if it passes!")
 	} else {
 		fmt.Println("\nNo test code generated for this diff.")
 	}
