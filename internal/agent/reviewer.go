@@ -15,14 +15,14 @@ import (
 
 // GeneratedTest holds the path and code for a single generated test file.
 type GeneratedTest struct {
-	FileName string
-	Code     string
+	FileName string `json:"file_name"`
+	Code     string `json:"code"`
 }
 
 // AgentResponse holds the structured output from the LLM, including a list of tests.
 type AgentResponse struct {
-	Review string
-	Tests  []GeneratedTest
+	Review string          `json:"review"`
+	Tests  []GeneratedTest `json:"tests"`
 }
 
 // getActionFromGemini attempts to get a response from the Gemini API.
@@ -40,13 +40,46 @@ func getActionFromGemini(ctx context.Context, prompt string) (string, error) {
 	}
 
 	model := "gemini-3-flash-preview"
-	result, err := client.Models.GenerateContent(ctx, model, genai.Text(prompt), nil)
+
+	// --- NEW: FORCE STRICT JSON OUTPUT ---
+	config := &genai.GenerateContentConfig{
+		ResponseMIMEType: "application/json",
+		ResponseSchema: &genai.Schema{
+			Type: genai.TypeObject,
+			Properties: map[string]*genai.Schema{
+				"review": {
+					Type:        genai.TypeString,
+					Description: "A concise summary of the changes, identifying bugs or logic errors.",
+				},
+				"tests": {
+					Type: genai.TypeArray,
+					Items: &genai.Schema{
+						Type: genai.TypeObject,
+						Properties: map[string]*genai.Schema{
+							"file_name": {
+								Type:        genai.TypeString,
+								Description: "The full relative path for the test file.",
+							},
+							"code": {
+								Type:        genai.TypeString,
+								Description: "The complete, compilable Go unit test code.",
+							},
+						},
+						Required: []string{"file_name", "code"},
+					},
+				},
+			},
+			Required: []string{"review", "tests"},
+		},
+	}
+
+	// Pass the 'config' object here instead of 'nil'
+	result, err := client.Models.GenerateContent(ctx, model, genai.Text(prompt), config)
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
 
 	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
-		// The response from the AI comes in parts, we need to get the text from the first part.
 		return fmt.Sprintf("%s", result.Candidates[0].Content.Parts[0].Text), nil
 	}
 
@@ -66,6 +99,7 @@ func callLocalModel(prompt string) (string, error) {
 		"model":    "llama3",
 		"messages": []map[string]string{{"role": "user", "content": prompt}},
 		"stream":   false,
+		"response_format": map[string]string{"type": "json_object"},
 	}
 
 	body, err := json.Marshal(payload)
@@ -115,39 +149,27 @@ func GetAction(diff string) (*AgentResponse, error) {
 	prompt := fmt.Sprintf(`
 		You are a Senior Software Engineer AI Agent.
 
-		Review the following git diff.
+        Your task is to review a git diff and generate unit tests.
+        
+        RULES:
+        1. Summarize the changes and identify any bugs or logic errors.
+        2. If a new function is added, write a complete, compilable Go unit test for it.
+        3. The test MUST be in the same package as the file it is testing.
+		4. Include file names and line numbers when relevant in the review.
 
-		TASKS:
-		1. Summarize the changes concisely.
-		2. Identify bugs, logic errors, or security risks (include file and line numbers).
-		3. If a new function is added, write a complete, compilable Go unit test for it, following standard Go practices:
-		   - The test file MUST be in the same directory as the file it is testing.
-		   - The test file MUST use the same package declaration as the file it is testing.
-		   - The test filename MUST be the original filename with a '_test.go' suffix (e.g., a test for 'files.go' should be 'files_test.go').
-		   - Since the test is in the same package, you do not need to import the code being tested.
-
-		YOU MUST FORMAT YOUR RESPONSE EXACTLY LIKE THIS. For each test you generate, provide a [FILENAME] block followed by a [TEST_CODE] block.
-		[REVIEW]
-		<your summary and bug report here>
-
-		[FILENAME]
-		<path for test file 1>
-		[TEST_CODE]
-		<code for test file 1>
-
-		GIT DIFF:
-		%s
+        GIT DIFF:
+        %s
 	`, diff)
 
 	// Try Gemini first
 	rawText, err := getActionFromGemini(context.Background(), prompt)
 	if err == nil {
 		slog.Info("Successfully received response from Gemini.")
-		return parseAgentResponse(rawText), nil
+		return parseAgentResponse(rawText)
 	}
 
 	// If Gemini fails, log the error and try the local model
-	slog.Warn("Gemini API failed, falling back to local model", "error", err)
+	slog.Warn("Gemini API failed. Falling back to local model.", "error", err)
 
 	rawText, err = callLocalModel(prompt)
 	if err != nil {
@@ -155,63 +177,25 @@ func GetAction(diff string) (*AgentResponse, error) {
 	}
 
 	slog.Info("Successfully received response from local model.")
-	return parseAgentResponse(rawText), nil
+	return parseAgentResponse(rawText)
 }
 
 // parseAgentResponse breaks the raw LLM string into our struct fields
-func parseAgentResponse(raw string) *AgentResponse {
+func parseAgentResponse(rawJSON string) (*AgentResponse, error) {
 	resp := &AgentResponse{
 		Tests: []GeneratedTest{},
 	}
 
-	// Normalize newlines to handle different OS conventions
-	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	// The AI may still wrap the JSON in markdown, so we defensively strip it.
+	cleanJSON := strings.TrimSpace(rawJSON)
+	cleanJSON = strings.TrimPrefix(cleanJSON, "```json")
+	cleanJSON = strings.TrimPrefix(cleanJSON, "```")
+	cleanJSON = strings.TrimSuffix(cleanJSON, "```")
+	cleanJSON = strings.TrimSpace(cleanJSON)
 
-	// The review is everything before the first occurrence of "[FILENAME]" on a new line.
-	// This is more robust than a simple split, as the review text itself might contain the word "[FILENAME]".
-	reviewAndFiles := strings.SplitN(raw, "\n[FILENAME]", 2)
-
-	reviewPart := reviewAndFiles[0]
-	resp.Review = strings.TrimSpace(strings.ReplaceAll(reviewPart, "[REVIEW]", ""))
-
-	// If there's no second part, it means no "[FILENAME]" marker was found on a new line.
-	if len(reviewAndFiles) < 2 {
-		return resp
+	if err := json.Unmarshal([]byte(cleanJSON), resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal JSON response: %w\nRaw Response:\n%s", err, rawJSON)
 	}
-
-	// The rest of the string contains all the file blocks.
-	// Prepend the delimiter we split on so the next split is consistent.
-	filesPart := "[FILENAME]" + reviewAndFiles[1]
-
-	// Now, split the filesPart into individual file blocks.
-	fileBlocks := strings.Split(filesPart, "[FILENAME]")
-
-	// Process each file block. The first element will be empty, so we skip it.
-	for i := 1; i < len(fileBlocks); i++ {
-		block := fileBlocks[i]
-
-		// Each file block is split by [TEST_CODE]
-		codeParts := strings.SplitN(block, "[TEST_CODE]", 2)
-		if len(codeParts) != 2 {
-			continue // Malformed block, skip it.
-		}
-
-		fileName := strings.TrimSpace(codeParts[0])
-
-		// Clean up the code block
-		code := strings.TrimSpace(codeParts[1])
-		code = strings.TrimPrefix(code, "```go")
-		code = strings.TrimPrefix(code, "```")
-		code = strings.TrimSuffix(code, "```")
-		code = strings.TrimSpace(code)
-
-		if fileName != "" && code != "" {
-			resp.Tests = append(resp.Tests, GeneratedTest{
-				FileName: fileName,
-				Code:     code,
-			})
-		}
-	}
-
-	return resp
+	
+	return resp, nil
 }
