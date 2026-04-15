@@ -79,9 +79,14 @@ func getActionFromGemini(ctx context.Context, prompt string) (string, error) {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
 
-	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
-		return fmt.Sprintf("%s", result.Candidates[0].Content.Parts[0].Text), nil
-	}
+	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 { 
+        text := result.Candidates[0].Content.Parts[0].Text
+        
+        if text != "" {
+            return text, nil
+        }
+        return "", fmt.Errorf("AI response was empty")
+    }
 
 	return "", fmt.Errorf("the AI returned an empty response")
 }
@@ -198,4 +203,49 @@ func parseAgentResponse(rawJSON string) (*AgentResponse, error) {
 	}
 	
 	return resp, nil
+}
+
+// FixTests asks the AI to fix previously generated tests based on compiler/test errors.
+func FixTests(diff string, previousTests []GeneratedTest, errorOutput string) (*AgentResponse, error) {
+    // Convert previous tests to a string so the AI knows what it wrote last time
+    prevCode := ""
+    for _, t := range previousTests {
+        prevCode += fmt.Sprintf("\n--- %s ---\n%s\n", t.FileName, t.Code)
+    }
+
+    prompt := fmt.Sprintf(`
+        You are a Senior Software Engineer AI Agent debugging a failed CI pipeline.
+
+        You previously wrote tests for this git diff, but they FAILED to compile or pass.
+        Analyze the error output and rewrite the tests to fix the issue.
+        
+        RULES:
+        1. Read the ERROR OUTPUT carefully. If it's a missing import, add it. If it's a logic error, fix the assertion.
+        2. Return the COMPLETE fixed test file(s). Do not just return the snippet that changed.
+
+        GIT DIFF:
+        %s
+
+        PREVIOUS TEST CODE YOU WROTE:
+        %s
+
+        ERROR OUTPUT FROM 'go test':
+        %s
+    `, diff, prevCode, errorOutput)
+
+    // Try Gemini
+    rawText, err := getActionFromGemini(context.Background(), prompt)
+    if err == nil {
+        slog.Info("Successfully received fix from Gemini.")
+        return parseAgentResponse(rawText)
+    }
+
+    // Fallback to Local
+    slog.Warn("Gemini API failed during fix. Falling back to local model.", "error", err)
+    rawText, err = callLocalModel(prompt)
+    if err != nil {
+        return nil, fmt.Errorf("all models failed during fix loop: %w", err)
+    }
+
+    return parseAgentResponse(rawText)
 }
