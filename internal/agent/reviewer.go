@@ -43,7 +43,7 @@ func getActionFromGemini(ctx context.Context, prompt string) (string, error) {
 		return "", fmt.Errorf("failed to create genai client: %w", err)
 	}
 
-	model := "gemini-3-flash-preview"
+	model := "gemini-3.1-flash"
 
 	// --- NEW: FORCE STRICT JSON OUTPUT ---
 	config := &genai.GenerateContentConfig{
