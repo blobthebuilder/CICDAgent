@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/blobthebuilder/CICDAgent/internal/agent"
 	"github.com/blobthebuilder/CICDAgent/internal/git"
@@ -16,15 +17,21 @@ func main() {
 		log.Fatal("Error loading .env file. Make sure it exists in the root folder.")
 	}
 
-	fmt.Println("🤖 CICD Agent: Analyzing last committed changes...")
+	// Default to "last-commit" mode, but allow overriding from command-line argument
+	diffMode := "last-commit"
+	if len(os.Args) > 1 {
+		diffMode = os.Args[1]
+	}
 
-	diff, err := git.GetDiff("last-commit")
+	fmt.Printf("🤖 CICD Agent: Analyzing changes in '%s' mode...\n", diffMode)
+
+	diff, err := git.GetDiff(diffMode)
 	if err != nil {
 		log.Fatalf("Error reading git: %v", err)
 	}
 
 	if diff == "" {
-		fmt.Println("No staged changes found. Use 'git add' on a file first!")
+		fmt.Println("No changes found to analyze in the selected mode.")
 		return
 	}
 

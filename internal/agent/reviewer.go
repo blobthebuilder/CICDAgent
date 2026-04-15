@@ -35,21 +35,26 @@ func GetAction(diff string) (*AgentResponse, error) {
 
 	// Notice the strict formatting instructions
 	prompt := fmt.Sprintf(`
-		You are a Senior Software Engineer AI Agent. 
+		You are a Senior Software Engineer AI Agent.
+
 		Review the following git diff.
-		
+
 		TASKS:
 		1. Summarize the changes concisely.
 		2. Identify bugs, logic errors, or security risks (include file and line numbers).
-		3. If a new function is added, write a complete, compilable Go unit test for it.
-		
+		3. If a new function is added, write a complete, compilable Go unit test for it, following standard Go practices:
+		   - The test file MUST be in the same directory as the file it is testing.
+		   - The test file MUST use the same package declaration as the file it is testing.
+		   - The test filename MUST be the original filename with a '_test.go' suffix (e.g., a test for 'files.go' should be 'files_test.go').
+		   - Since the test is in the same package, you do not need to import the code being tested.
+
 		YOU MUST FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
 		[REVIEW]
 		<your summary and bug report here>
 		[FILENAME]
-		<the suggested test filename, e.g., math_utils_test.go>
+		<the full path for the test file, e.g., internal/tools/files_test.go>
 		[TEST_CODE]
-		<the raw go code for the test, without markdown backticks>
+		<the raw go code for the test, without markdown backticks. It must be a single, complete file.>
 
 		GIT DIFF:
 		%s

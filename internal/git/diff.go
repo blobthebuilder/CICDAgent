@@ -19,8 +19,22 @@ func GetDiff(mode string) (string, error) {
 		} else {
 			args = []string{"diff", "--cached", "--unified=3"}
 		}
-	case "last-commit":
-		args = []string{"diff", "HEAD~1", "--unified=3"}
+	case "last-commit": // this compares only changes in last commit
+		// Check if HEAD~1 exists to avoid crashing on the very first commit
+		if err := exec.Command("git", "rev-parse", "--verify", "HEAD~1").Run(); err != nil {
+			// If HEAD~1 doesn't exist, we're on the initial commit. Diff against the empty tree.
+			args = []string{"diff", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "HEAD", "--unified=3"}
+		} else {
+			args = []string{"diff", "HEAD~1", "HEAD", "--unified=3"}
+		}
+	case "full": // this compares the entire codebase from the start
+		// 4b825dc642cb6eb9a060e54bf8d69288fbee4904 is the hash of an empty git tree
+		if err := exec.Command("git", "rev-parse", "HEAD").Run(); err != nil {
+			// No commits yet, diff staged files against empty tree
+			args = []string{"diff", "--cached", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "--unified=3"}
+		} else {
+			args = []string{"diff", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "HEAD", "--unified=3"}
+		}
 	default:
 		args = []string{"diff", "--unified=3"}
 	}
