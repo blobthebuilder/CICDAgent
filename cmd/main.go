@@ -21,7 +21,6 @@ func main() {
 
     err := godotenv.Load()
     if err != nil {
-        // slog for system-level warnings (key-value pair style)
         slog.Warn("Could not load .env file", "error", err)
     }
 
@@ -31,7 +30,6 @@ func main() {
         diffMode = os.Args[1]
     }
 
-    // fmt for human-facing CLI headers
     fmt.Printf("🤖 CICD Agent: Analyzing changes in '%s' mode...\n", diffMode)
 
     diff, err := git.GetDiff(ctx, diffMode)
@@ -75,7 +73,7 @@ func main() {
         // Write the files
         testDirs := make(map[string]struct{}) // Use a map to store unique directories for targeted testing
         for _, test := range response.Tests {
-            writtenPath, err := tools.WriteTestFile(test.FileName, test.Code)
+            writtenPath, err := tools.WriteTestFile(test.FileName, test.Imports, test.Code)
             if err != nil {
                 slog.Error("Failed to save test file", "file", test.FileName, "error", err)
                 os.Exit(1) 
