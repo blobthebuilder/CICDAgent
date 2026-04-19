@@ -15,6 +15,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
+
+
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -72,37 +74,54 @@ func main() {
 
         // Write the files
         testDirs := make(map[string]struct{}) // Use a map to store unique directories for targeted testing
+        var writeError error
         for _, test := range response.Tests {
             writtenPath, err := tools.WriteTestFile(test.FileName, test.Imports, test.Code)
             if err != nil {
                 slog.Error("Failed to save test file", "file", test.FileName, "error", err)
-                os.Exit(1) 
+                writeError = fmt.Errorf("failed to save test file %s: %w", test.FileName, err)
+                break
             }
             testDirs[filepath.Dir(writtenPath)] = struct{}{}
             fmt.Printf("✅ Saved test file to %s\n", writtenPath)
+
+            // Parse the generated code and list the newly added functions
+            funcNames := tools.ExtractFunctionNames(test.Code)
+            if len(funcNames) > 0 {
+                fmt.Println("   Added functions:")
+                for _, name := range funcNames {
+                    fmt.Printf("   - %s\n", name)
+                }
+            }
         }
 
-        // Run the tests
-        dirsToTest := make([]string, 0, len(testDirs))
-        for dir := range testDirs {
-            dirsToTest = append(dirsToTest, "./"+filepath.ToSlash(dir))
-        }
-        fmt.Printf("🏃 Running 'go test' on: %s ...\n", strings.Join(dirsToTest, " "))
-        testResult, err := tools.RunGoTests(ctx, dirsToTest...)
-        if err != nil {
-            slog.Error("System error while executing tests", "error", err)
-            os.Exit(1)
+        var failureOutput string
+        if writeError != nil {
+            failureOutput = writeError.Error()
+        } else {
+            // Run the tests
+            dirsToTest := make([]string, 0, len(testDirs))
+            for dir := range testDirs {
+                dirsToTest = append(dirsToTest, "./"+filepath.ToSlash(dir))
+            }
+            fmt.Printf("🏃 Running 'go test' on: %s ...\n", strings.Join(dirsToTest, " "))
+            testResult, err := tools.RunGoTests(ctx, dirsToTest...)
+            if err != nil {
+                slog.Error("System error while executing tests", "error", err)
+                os.Exit(1)
+            }
+
+            if testResult.Passed {
+                fmt.Println("✅ ALL TESTS PASSED!")
+                success = true
+                break // Exit the loop!
+            } 
+            failureOutput = testResult.Output
         }
 
-        if testResult.Passed {
-            fmt.Println("✅ ALL TESTS PASSED!")
-            success = true
-            break // Exit the loop!
-        } 
-
-        // IF WE REACH HERE, THE TESTS FAILED
-        fmt.Println("❌ TESTS FAILED:")
-        fmt.Println(testResult.Output)
+        // IF WE REACH HERE, THE TESTS OR FILE WRITING FAILED
+        fmt.Println("❌ ACTION FAILED:")
+        fmt.Println(failureOutput)
 
         if attempt == maxAttempts {
             slog.Error("Agent failed to fix the tests after maximum attempts.", "max_attempts", maxAttempts)
@@ -112,7 +131,7 @@ func main() {
         fmt.Println("🧠 Agent is analyzing the error and attempting a fix...")
         
         // Call the new Fix function, passing the error output back to the AI
-		response, err = agent.FixTests(ctx, diff, response.Tests, testResult.Output)
+		response, err = agent.FixTests(ctx, diff, response.Tests, failureOutput)
 		if err != nil {
             slog.Error("AI failed to generate a fix", "error", err)
             os.Exit(1)

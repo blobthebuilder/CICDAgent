@@ -44,7 +44,12 @@ func TestWriteTestFile_Security(t *testing.T) {
 
 func TestWriteTestFile_AppendContent(t *testing.T) {
 	// Setup: Create a directory and initial files
-	testDir := t.TempDir() // Creates a temporary directory that is automatically cleaned up
+	// We use a relative local directory because WriteTestFile now strictly blocks absolute paths
+	testDir := "temp_append_test_dir"
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		t.Fatalf("Failed to create relative temp dir: %v", err)
+	}
+	defer os.RemoveAll(testDir) // Clean up afterwards
 
 	srcFileName := filepath.Join(testDir, "append.go")
 	testFileName := filepath.Join(testDir, "append_test.go")
