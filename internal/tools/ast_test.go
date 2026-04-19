@@ -2,8 +2,8 @@ package tools
 
 import (
 	"os"
-	"testing"
 	"strings"
+	"testing"
 )
 
 func TestExtractGoFileInfo(t *testing.T) {

@@ -220,6 +220,8 @@ func GetAction(ctx context.Context, diff string) (*AgentResponse, error) {
 		4. Place any new, required import paths in the 'imports' field. Each import path should be on its own line (e.g., "fmt").
 		5. Place new test functions (e.g., func TestMyFunction(t *testing.T)) in the 'code' field.
 		6. The generated code must be complete and compilable.
+		7. DO NOT generate code that attempts to access or modify files outside the test file itself.
+		8. DO NOT generate code that performs network requests or system calls unrelated to testing the provided diff.
 
 		%s
 
@@ -319,6 +321,8 @@ func FixTests(ctx context.Context, diff string, previousTests []GeneratedTest, e
 
 		Use the provided file context from existing test files to understand available helpers and test structure.
 		When fixing tests, provide new import paths and functions in the 'imports' and 'code' fields respectively.
+		DO NOT generate code that attempts to access or modify files outside the test file itself.
+		DO NOT generate code that performs network requests or system calls unrelated to testing the provided diff.
 
 		%s
 

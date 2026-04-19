@@ -3,7 +3,9 @@ package tools
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // TestResult holds the output of the go test command
@@ -42,4 +44,43 @@ func RunGoTests(ctx context.Context, paths ...string) (*TestResult, error) {
 
 	result.Passed = true
 	return result, nil
+}
+
+// RunGoStaticAnalysis executes 'go fmt' and 'go vet' on a specific set of directories.
+// It returns an error if any of the static analysis tools report issues.
+func RunGoStaticAnalysis(ctx context.Context, paths ...string) (string, error) {
+	var outputBuilder strings.Builder
+
+	// 1. Run go fmt
+	fmtArgs := []string{"fmt"}
+	if len(paths) > 0 {
+		fmtArgs = append(fmtArgs, paths...)
+	} else {
+		fmtArgs = append(fmtArgs, "./...") // Default to current module
+	}
+	fmtCmd := exec.CommandContext(ctx, "go", fmtArgs...)
+	fmtOut, err := fmtCmd.CombinedOutput()
+	if err != nil {
+		outputBuilder.WriteString(fmt.Sprintf("`go fmt` failed:\n%s\nError: %v\n", string(fmtOut), err))
+		return outputBuilder.String(), fmt.Errorf("`go fmt` failed: %w", err)
+	}
+	if len(fmtOut) > 0 {
+		outputBuilder.WriteString(fmt.Sprintf("`go fmt` output:\n%s\n", string(fmtOut)))
+	}
+
+	// 2. Run go vet
+	vetArgs := []string{"vet"}
+	if len(paths) > 0 {
+		vetArgs = append(vetArgs, paths...)
+	} else {
+		vetArgs = append(vetArgs, "./...") // Default to current module
+	}
+	vetCmd := exec.CommandContext(ctx, "go", vetArgs...)
+	vetOut, err := vetCmd.CombinedOutput()
+	if err != nil {
+		outputBuilder.WriteString(fmt.Sprintf("`go vet` failed:\n%s\nError: %v\n", string(vetOut), err))
+		return outputBuilder.String(), fmt.Errorf("`go vet` reported issues: %w", err)
+	}
+	outputBuilder.WriteString(fmt.Sprintf("`go vet` output:\n%s\n", string(vetOut)))
+	return outputBuilder.String(), nil
 }

@@ -73,8 +73,10 @@ func main() {
         }
 
         // Write the files
-        testDirs := make(map[string]struct{}) // Use a map to store unique directories for targeted testing
         var writeError error
+        var failureOutput string // Declared here
+        var dirsToTest []string  // Declared here
+        testDirs := make(map[string]struct{}) // Use a map to store unique directories for targeted testing
         for _, test := range response.Tests {
             writtenPath, err := tools.WriteTestFile(test.FileName, test.Imports, test.Code)
             if err != nil {
@@ -95,28 +97,41 @@ func main() {
             }
         }
 
-        var failureOutput string
         if writeError != nil {
             failureOutput = writeError.Error()
         } else {
-            // Run the tests
-            dirsToTest := make([]string, 0, len(testDirs))
+            // Populate dirsToTest here, after files are written and testDirs is populated
+            dirsToTest = make([]string, 0, len(testDirs))
             for dir := range testDirs {
                 dirsToTest = append(dirsToTest, "./"+filepath.ToSlash(dir))
             }
-            fmt.Printf("🏃 Running 'go test' on: %s ...\n", strings.Join(dirsToTest, " "))
-            testResult, err := tools.RunGoTests(ctx, dirsToTest...)
-            if err != nil {
-                slog.Error("System error while executing tests", "error", err)
-                os.Exit(1)
-            }
 
-            if testResult.Passed {
-                fmt.Println("✅ ALL TESTS PASSED!")
-                success = true
-                break // Exit the loop!
-            } 
-            failureOutput = testResult.Output
+            // Run static analysis (go fmt, go vet) on the generated files
+            fmt.Printf("🔍 Running static analysis on generated files in: %s ...\n", strings.Join(dirsToTest, " "))
+            staticAnalysisOutput, err := tools.RunGoStaticAnalysis(ctx, dirsToTest...)
+            if err != nil {
+                slog.Error("Static analysis failed", "error", err)
+                failureOutput = fmt.Sprintf("Static analysis failed:\n%s\n%v", staticAnalysisOutput, err)
+            } else {
+                if len(staticAnalysisOutput) > 0 {
+                    fmt.Printf("Static analysis output:\n%s\n", staticAnalysisOutput)
+                }
+
+            // Run the tests
+                fmt.Printf("🏃 Running 'go test' on: %s ...\n", strings.Join(dirsToTest, " "))
+                testResult, err := tools.RunGoTests(ctx, dirsToTest...)
+                if err != nil {
+                    slog.Error("System error while executing tests", "error", err)
+                    os.Exit(1) // This is a system error, not a test failure, so exit.
+                }
+
+                if testResult.Passed {
+                    fmt.Println("✅ ALL TESTS PASSED!")
+                    success = true
+                    break // Exit the loop!
+                }
+                failureOutput = testResult.Output
+            }
         }
 
         // IF WE REACH HERE, THE TESTS OR FILE WRITING FAILED

@@ -10,7 +10,7 @@ import (
 func ExtractFunctionNames(code string) []string {
 	var names []string
 	fset := token.NewFileSet()
-	
+
 	// First, attempt to parse the code as a complete file
 	node, err := parser.ParseFile(fset, "", code, 0)
 	if err != nil {
