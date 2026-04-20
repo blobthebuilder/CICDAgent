@@ -131,6 +131,10 @@ func callLocalModel(ctx context.Context, prompt string) (string, error) {
 		"model":    modelName,
 		"messages": []map[string]string{{"role": "user", "content": prompt}},
 		"stream":   false,
+		"options": map[string]interface{}{
+			"temperature": 0.2, // Lower temperature is better for code generation
+		},
+		"format": "json",
 	}
 
 	body, err := json.Marshal(payload)
