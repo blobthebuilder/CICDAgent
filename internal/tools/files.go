@@ -68,7 +68,7 @@ func WriteTestFile(filename string, newImports string, newCode string) (string, 
 		}
 	}
 
-	// 4. Add new functions/declarations from newCode
+	// 4. Add or update functions/declarations from newCode
 	if strings.TrimSpace(newCode) != "" {
 		wrappedCode := fmt.Sprintf("package %s\n\n%s", node.Name.Name, newCode)
 
@@ -77,19 +77,71 @@ func WriteTestFile(filename string, newImports string, newCode string) (string, 
 		if err != nil {
 			return "", fmt.Errorf("failed to parse new code block: %w\n---Code Block---\n%s", err, newCode)
 		}
-		node.Decls = append(node.Decls, tempNode.Decls...)
+
+		// Collect names of functions in the new code
+		newFuncNames := make(map[string]bool)
+		for _, newDecl := range tempNode.Decls {
+			if newFn, isFn := newDecl.(*ast.FuncDecl); isFn {
+				newFuncNames[newFn.Name.Name] = true
+			}
+		}
+
+		// Filter out existing functions with those names and capture their position spans
+		var filteredDecls []ast.Decl
+		type span struct{ start, end token.Pos }
+		var removedSpans []span
+
+		for _, existingDecl := range node.Decls {
+			if existingFn, isFn := existingDecl.(*ast.FuncDecl); isFn && newFuncNames[existingFn.Name.Name] {
+				start := existingFn.Pos()
+				if existingFn.Doc != nil {
+					start = existingFn.Doc.Pos()
+				}
+				removedSpans = append(removedSpans, span{start, existingFn.End()})
+				continue
+			}
+			filteredDecls = append(filteredDecls, existingDecl)
+		}
+		node.Decls = filteredDecls
+
+		// Remove comments that belonged to the replaced functions
+		var filteredComments []*ast.CommentGroup
+		for _, cg := range node.Comments {
+			keep := true
+			for _, s := range removedSpans {
+				if cg.Pos() >= s.start && cg.End() <= s.end {
+					keep = false
+					break
+				}
+			}
+			if keep {
+				filteredComments = append(filteredComments, cg)
+			}
+		}
+		node.Comments = filteredComments
 	}
 
-	// 5. Format the modified AST back to a buffer and write to file.
+	// 5. Format the modified AST back to a buffer
 	var buf bytes.Buffer
 	if err := format.Node(&buf, fset, node); err != nil {
 		return "", fmt.Errorf("failed to format updated AST for '%s': %w", destPath, err)
 	}
 
+	// 6. Append the new code text and format the entire file
+	if strings.TrimSpace(newCode) != "" {
+		buf.WriteString("\n\n")
+		buf.WriteString(newCode)
+	}
+
+	finalSource, err := format.Source(buf.Bytes())
+	if err != nil {
+		return "", fmt.Errorf("failed to format final source code: %w\n%s", err, buf.String())
+	}
+
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return "", fmt.Errorf("failed to create directory for '%s': %w", destPath, err)
 	}
-	if err := os.WriteFile(destPath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(destPath, finalSource, 0644); err != nil {
 		return "", fmt.Errorf("failed to write updated file '%s': %w", destPath, err)
 	}
 

@@ -23,8 +23,8 @@ type GeneratedTest struct {
 
 // AgentResponse holds the structured output from the LLM, including a list of tests.
 type AgentResponse struct {
-	Review         string          `json:"review"`
-	Tests          []GeneratedTest `json:"tests"`
+	Review string          `json:"review"`
+	Tests  []GeneratedTest `json:"tests"`
 
 	// NEW: Branching fields for the Fix loop
 	CodeBugFound   bool   `json:"code_bug_found"`
@@ -39,7 +39,7 @@ func callGeminiAPI(ctx context.Context, prompt string, schema *genai.Schema) (st
 	}
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: apiKey,
+		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
@@ -62,17 +62,17 @@ func callGeminiAPI(ctx context.Context, prompt string, schema *genai.Schema) (st
 	}
 
 	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
-			// Access the Text field directly. No type assertion needed.
-			text := result.Candidates[0].Content.Parts[0].Text
-			
-			if text != "" {
-				return text, nil
-			}
-			return "", fmt.Errorf("AI response was empty")
+		// Access the Text field directly. No type assertion needed.
+		text := result.Candidates[0].Content.Parts[0].Text
+
+		if text != "" {
+			return text, nil
 		}
-		
-		return "", fmt.Errorf("AI returned no candidates or parts")
+		return "", fmt.Errorf("AI response was empty")
 	}
+
+	return "", fmt.Errorf("AI returned no candidates or parts")
+}
 
 // getActionFromGemini attempts to get a response from the Gemini API.
 func getActionFromGemini(ctx context.Context, prompt string) (string, error) {
@@ -82,7 +82,7 @@ func getActionFromGemini(ctx context.Context, prompt string) (string, error) {
 		Properties: map[string]*genai.Schema{
 			"review": {
 				Type:        genai.TypeString,
-				Description: "A concise summary of the changes, identifying bugs or logic errors.",
+				Description: "A rigorous code review. Actively search for logic flaws, edge cases, and missing error handling. Explain any issues found in detail.",
 			},
 			"tests": {
 				Type: genai.TypeArray,
@@ -99,7 +99,7 @@ func getActionFromGemini(ctx context.Context, prompt string) (string, error) {
 						},
 						"code": {
 							Type:        genai.TypeString,
-							Description: "A string containing only the new, complete, and compilable Go test functions to be added.",
+							Description: "A string containing only the complete, compilable Go test functions to be added or updated.",
 						},
 					},
 					Required: []string{"file_name", "imports", "code"},
@@ -179,38 +179,67 @@ func callLocalModel(ctx context.Context, prompt string) (string, error) {
 	return apiResp.Choices[0].Message.Content, nil
 }
 
-// getTestFileContext finds corresponding test files for changed files and extracts their AST info.
-func getTestFileContext(diff string) string {
+// getFullFileContext finds changed files and their test counterparts, extracting full content and AST info.
+func getFullFileContext(diff string) string {
 	changedFiles := parseFilenamesFromDiff(diff)
-	var astContextBuilder strings.Builder
+	var contextBuilder strings.Builder
 
-	foundContext := false
+	if len(changedFiles) > 0 {
+		contextBuilder.WriteString("For context, here are the full contents and AST structures of the modified files and their corresponding test files:\n\n")
+	}
+
 	for _, file := range changedFiles {
+		contextBuilder.WriteString("================================================================\n")
+		contextBuilder.WriteString(fmt.Sprintf("--- Source File: %s ---\n", file))
+
+		// Get source AST
+		if srcAst, err := tools.ExtractGoFileInfo(file); err == nil {
+			contextBuilder.WriteString("--- AST Structure ---\n")
+			contextBuilder.WriteString(srcAst)
+		} else {
+			slog.Warn("Could not extract AST info for source file", "file", file, "error", err)
+		}
+
+		// Get source content
+		if srcContent, err := tools.ReadFile(file); err == nil {
+			contextBuilder.WriteString("\n--- Full File Content ---\n")
+			contextBuilder.WriteString(srcContent)
+			contextBuilder.WriteString("\n")
+		} else {
+			slog.Warn("Could not read source file content", "file", file, "error", err)
+		}
+
 		// Construct the test file name
 		testFile := strings.TrimSuffix(file, ".go") + "_test.go"
 
 		// Check if the test file exists
 		if _, err := os.Stat(testFile); err == nil {
-			// File exists, parse it
-			info, err := tools.ExtractGoFileInfo(testFile)
-			if err != nil {
-				slog.Warn("Could not extract AST info for test file", "file", testFile, "error", err)
-				continue // Skip files that can't be parsed
+			contextBuilder.WriteString(fmt.Sprintf("\n--- Corresponding Test File: %s ---\n", testFile))
+
+			// Get test AST
+			if testAst, err := tools.ExtractGoFileInfo(testFile); err == nil {
+				contextBuilder.WriteString("--- AST Structure ---\n")
+				contextBuilder.WriteString(testAst)
 			}
-			if !foundContext {
-				astContextBuilder.WriteString("For context, here are the declarations and function signatures from existing test files:\n\n")
-				foundContext = true
+
+			// Get test content
+			if testContent, err := tools.ReadFile(testFile); err == nil {
+				contextBuilder.WriteString("\n--- Full File Content ---\n")
+				contextBuilder.WriteString(testContent)
+				contextBuilder.WriteString("\n")
 			}
-			astContextBuilder.WriteString(fmt.Sprintf("--- Existing Test File: %s ---\n%s\n", testFile, info))
+		} else {
+			contextBuilder.WriteString(fmt.Sprintf("\n--- Corresponding Test File: %s (DOES NOT EXIST YET) ---\n", testFile))
 		}
+		contextBuilder.WriteString("================================================================\n\n")
 	}
-	return astContextBuilder.String()
+	return contextBuilder.String()
 }
 
 // GetAction orchestrates getting a response from an AI model, with a fallback.
 func GetAction(ctx context.Context, diff string) (*AgentResponse, error) {
-	// Get AST context from existing test files.
-	astContext := getTestFileContext(diff)
+	// Get full context from changed source and test files.
+	fileContext := getFullFileContext(diff)
 
 	prompt := fmt.Sprintf(`
 		You are a Senior Software Engineer AI Agent.
@@ -218,20 +247,21 @@ func GetAction(ctx context.Context, diff string) (*AgentResponse, error) {
 		Your task is to review a git diff and generate unit tests.
 
 		RULES:
-		1. Summarize the changes. Specifically identify any bugs, security issues, or logic errors in the 'review' field. If you don't find any issues, say "No issues were found."
+		1. CRITICAL REVIEW: Perform a deep, highly critical logical review of the git diff. Step through the execution mentally. Actively search for bugs, edge cases, unhandled errors, concurrency issues, and security vulnerabilities. Detail your findings in the 'review' field. Only say "No issues were found" if you have rigorously verified the logic is flawless.
 		2. If a new function is added, write a Go unit test for it.
-		3. Use the provided context from existing test files to understand available helpers and test structure. Do not duplicate existing tests.
-		4. Place any new, required import paths in the 'imports' field. Each import path should be on its own line (e.g., "fmt").
-		5. Place new test functions (e.g., func TestMyFunction(t *testing.T)) in the 'code' field.
-		6. The generated code must be complete and compilable.
-		7. DO NOT generate code that attempts to access or modify files outside the test file itself.
-		8. DO NOT generate code that performs network requests or system calls unrelated to testing the provided diff.
+		3. If an existing test is broken or needs to be updated due to changes, provide the fully updated test function.
+		4. Use the provided context (full source code, existing tests, and AST structures) to understand the codebase, available helpers, and dependencies. Do not duplicate existing tests.
+		5. Place any new, required import paths in the 'imports' field. Each import path should be on its own line (e.g., "fmt").
+		6. Place new or updated test functions (e.g., func TestMyFunction(t *testing.T)) in the 'code' field. To update an existing test, provide its full updated definition; it will replace the existing one.
+		7. The generated code must be complete and compilable.
+		8. DO NOT generate code that attempts to access or modify files outside the test file itself.
+		9. DO NOT generate code that performs network requests or system calls unrelated to testing the provided diff.
 
 		%s
 
 		GIT DIFF:
 		%s
-	`, astContext, diff)
+	`, fileContext, diff)
 
 	// Try Gemini first
 	rawText, err := getActionFromGemini(ctx, prompt)
@@ -268,7 +298,7 @@ func parseAgentResponse(rawJSON string) (*AgentResponse, error) {
 	if err := json.Unmarshal([]byte(cleanJSON), resp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON response: %w\nRaw Response:\n%s", err, rawJSON)
 	}
-	
+
 	return resp, nil
 }
 
@@ -307,11 +337,11 @@ func parseFilenamesFromDiff(diff string) []string {
 
 // FixTests asks the AI to fix previously generated tests based on compiler/test errors.
 func FixTests(ctx context.Context, diff string, previousTests []GeneratedTest, errorOutput string) (*AgentResponse, error) {
-    prevCode := ""
+	prevCode := ""
 	for _, t := range previousTests {
 		prevCode += fmt.Sprintf("\n--- %s ---\n// Imports\n%s\n\n// Code\n%s\n", t.FileName, t.Imports, t.Code)
 	}
-	astContext := getTestFileContext(diff)
+	fileContext := getFullFileContext(diff)
 
 	prompt := fmt.Sprintf(`
         You are a Senior Software Engineer debugging a failing CI pipeline.
@@ -323,8 +353,8 @@ func FixTests(ctx context.Context, diff string, previousTests []GeneratedTest, e
 
         PATH B (Code Error): If the test is correct but the SOURCE CODE is broken, set "code_bug_found" to true, provide a detailed "bug_explanation", and leave the "tests" array empty.
 
-		Use the provided file context from existing test files to understand available helpers and test structure.
-		When fixing tests, provide new import paths and functions in the 'imports' and 'code' fields respectively.
+		Use the provided context (full source code, existing tests, and AST structures) to understand the codebase and correct any implementation or assumption errors.
+		When fixing tests, provide new or updated import paths and functions in the 'imports' and 'code' fields respectively. If updating an existing test, provide the full function definition.
 		DO NOT generate code that attempts to access or modify files outside the test file itself.
 		DO NOT generate code that performs network requests or system calls unrelated to testing the provided diff.
 
@@ -338,7 +368,7 @@ func FixTests(ctx context.Context, diff string, previousTests []GeneratedTest, e
 
 		ERROR OUTPUT:
 		%s
-    `, astContext, diff, prevCode, errorOutput)
+    `, fileContext, diff, prevCode, errorOutput)
 
 	// Try Gemini first
 	schema := &genai.Schema{
@@ -352,9 +382,9 @@ func FixTests(ctx context.Context, diff string, previousTests []GeneratedTest, e
 				Items: &genai.Schema{
 					Type: genai.TypeObject,
 					Properties: map[string]*genai.Schema{
-						"file_name":    {Type: genai.TypeString},
-						"imports": {Type: genai.TypeString, Description: "New import paths needed for the test functions."},
-						"code":    {Type: genai.TypeString, Description: "New test functions to add."},
+						"file_name": {Type: genai.TypeString},
+						"imports":   {Type: genai.TypeString, Description: "New import paths needed for the test functions."},
+						"code":      {Type: genai.TypeString, Description: "New or updated test functions to add/replace."},
 					},
 				},
 			},

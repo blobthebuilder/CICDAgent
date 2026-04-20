@@ -64,44 +64,70 @@ func TestParseFilenamesFromDiff(t *testing.T) {
 		}
 	}
 }
-func TestGetTestFileContext(t *testing.T) {
+
+func TestGetFullFileContext(t *testing.T) {
 	tmpDir := t.TempDir()
 	currDir, _ := os.Getwd()
-	if err := os.Chdir(tmpDir); err !=
-		nil {
+	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Chdir(currDir)
+
 	srcFile := "processor.go"
 	testFile := "processor_test.go"
 	srcContent := "package processor\nfunc Process() {}\n"
-	testContent :=
-		"package processor\nimport \"testing\"\nfunc TestProcess(t *testing.T) {}\n"
+	testContent := "package processor\nimport \"testing\"\nfunc TestProcess(t *testing.T) {}\n"
 
-	if err := os.WriteFile(srcFile, []byte(srcContent),
-		0644); err !=
-		nil {
+	if err := os.WriteFile(srcFile, []byte(srcContent), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(testFile,
-		[]byte(testContent), 0644,
-	); err != nil {
+	if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
 		t.Fatal(err)
 	}
+
 	diff := "--- a/processor.go\n+++ b/processor.go\n"
-	ctxResult := getTestFileContext(diff)
-	if !strings.Contains(ctxResult,
-		"--- Existing Test File: processor_test.go ---",
-	) {
-		t.Errorf("expected context to contain test file header, got: %s",
+	ctxResult := getFullFileContext(diff)
 
-			ctxResult,
-		)
+	if !strings.Contains(ctxResult, "--- Corresponding Test File: processor_test.go ---") {
+		t.Errorf("expected context to contain test file header, got: %s", ctxResult)
 	}
-	if !strings.Contains(ctxResult,
-		"func TestProcess(t *testing.T)") {
-		t.Errorf("expected context to contain function signature, got: %s",
+	if !strings.Contains(ctxResult, "func TestProcess(t *testing.T)") {
+		t.Errorf("expected context to contain function signature, got: %s", ctxResult)
+	}
+	if !strings.Contains(ctxResult, "func Process() {}") {
+		t.Errorf("expected context to contain full source code, got: %s", ctxResult)
+	}
+}
 
-			ctxResult)
+func TestGetFullFileContext_NoFiles(t *testing.T) {
+	diff := "--- a/README.md\n+++ b/README.md\n"
+	ctxResult := getFullFileContext(diff)
+	if ctxResult != "" {
+		t.Errorf("expected empty context for non-Go files, got: %q", ctxResult)
+	}
+}
+
+func TestGetFullFileContext_OnlySource(t *testing.T) {
+	tmpDir := t.TempDir()
+	currDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(currDir)
+
+	srcFile := "only_src.go"
+	srcContent := "package main\nfunc Main() {}\n"
+	if err := os.WriteFile(srcFile, []byte(srcContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := "--- a/only_src.go\n+++ b/only_src.go\n"
+	ctxResult := getFullFileContext(diff)
+
+	if !strings.Contains(ctxResult, "--- Source File: only_src.go ---") {
+		t.Error("expected context to contain source file header")
+	}
+	if !strings.Contains(ctxResult, "--- Corresponding Test File: only_src_test.go (DOES NOT EXIST YET) ---") {
+		t.Error("expected context to indicate test file does not exist")
 	}
 }

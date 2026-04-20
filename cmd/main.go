@@ -90,7 +90,7 @@ func main() {
             // Parse the generated code and list the newly added functions
             funcNames := tools.ExtractFunctionNames(test.Code)
             if len(funcNames) > 0 {
-                fmt.Println("   Added functions:")
+                fmt.Println("   Added/Updated functions:")
                 for _, name := range funcNames {
                     fmt.Printf("   - %s\n", name)
                 }
